@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS `user` (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(100) NOT NULL,
+    email VARCHAR(255),
+    gender VARCHAR(20),
+    birthday DATE
+);

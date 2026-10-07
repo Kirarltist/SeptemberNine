@@ -1,0 +1,13 @@
+# ---------- 本地私密配置（数据库账号密码等）----------
+application-local.yml
+
+# ---------- 构建产物 ----------
+target/
+frontend/dist/
+frontend/node_modules/
+
+# ---------- IDE ----------
+.idea/workspace.xml
+.idea/dataSources.local.xml
+.idea/shelf/
+*.iml

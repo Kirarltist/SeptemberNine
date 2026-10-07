@@ -1,0 +1,19 @@
+spring:
+  # 数据库账号密码等敏感配置不在本文件里，而是放在项目根目录的
+  # application-local.yml（已被 .gitignore 忽略）中自动加载。
+  # 参见同目录的 application-local.yml.example。
+  # 部署到服务器时也可以用环境变量 DB_USERNAME / DB_PASSWORD 覆盖。
+  config:
+    import: optional:file:./application-local.yml
+  sql:
+    init:
+      mode: always
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/septembernine?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
