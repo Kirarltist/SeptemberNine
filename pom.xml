@@ -30,6 +30,16 @@
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
+        <!-- 农历 / 二十四节气编算：公历与农历互转、节气、农历节日、闰月。
+             农历是天文历法（定朔定气 + 无中气置闰），必须依赖成熟实现，
+             不能自己算：2033 年这类置闰歧义年份，不同算法会给出不同结果。
+             已验证 cn.6tail:lunar:1.7.7 对 2033 年给出「闰十一月」，
+             与中国官方编算标准（GB/T 33661-2017）一致。 -->
+        <dependency>
+            <groupId>cn.6tail</groupId>
+            <artifactId>lunar</artifactId>
+            <version>1.7.7</version>
+        </dependency>
         <dependency>
             <groupId>org.mybatis.spring.boot</groupId>
             <artifactId>mybatis-spring-boot-starter</artifactId>

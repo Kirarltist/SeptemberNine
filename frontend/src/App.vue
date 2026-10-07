@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const mode = ref('login')
 const currentView = ref('auth')
@@ -36,18 +36,34 @@ function toIsoWeek(date) {
   const thursday = new Date(date.getFullYear(), date.getMonth(), date.getDate())
   // getDay() 里周日是 0，这里换算成 ISO 的周一为 1
   thursday.setDate(thursday.getDate() + 4 - (thursday.getDay() || 7))
-  const yearStart = new Date(thursday.getFullYear(), 0, 1)
-  const week = Math.ceil(((thursday - yearStart) / 86400000 + 1) / 7)
-  return { year: thursday.getFullYear(), week }
+  // 天数差必须用 UTC 毫秒来算：本地时间做差会被夏令时偏移 1 小时，
+  // 当结果恰好落在周界上时 Math.ceil 会多算一周（南半球时区尤其明显）。
+  const dayDiff = Math.round(
+    (Date.UTC(thursday.getFullYear(), thursday.getMonth(), thursday.getDate())
+      - Date.UTC(thursday.getFullYear(), 0, 1)) / 86400000
+  )
+  return { year: thursday.getFullYear(), week: Math.floor(dayDiff / 7) + 1 }
 }
 
-const now = new Date()
-const todayIso = toIsoDate(now)
-const todayDate = now.getDate()
-const todayLabel = `${now.getMonth() + 1} 月 ${now.getDate()} 日`
-const weekdayLabel = WEEKDAYS[now.getDay()]
-const isoWeek = toIsoWeek(now)
-const weekLabel = `${isoWeek.year} 年第 ${isoWeek.week} 周`
+/**
+ * 「今天」统一从这里取。
+ *
+ * businessToday 来自后端（东八区口径），登录或拉日历时会带回来；
+ * 拿不到时才回退到设备本地日期。这样生日上限、日历高亮与后端的判断
+ * 始终一致，不会因为访问者设备的时区而错开一天。
+ */
+const businessToday = ref('')
+const localNow = ref(new Date())
+const todayIso = computed(() => businessToday.value || toIsoDate(localNow.value))
+// 用本地时间构造（不带 Z），这样 getDate()/getDay() 读出来就是日历上的那一天
+const today = computed(() => new Date(`${todayIso.value}T00:00:00`))
+const todayDate = computed(() => today.value.getDate())
+const todayLabel = computed(() => `${today.value.getMonth() + 1} 月 ${today.value.getDate()} 日`)
+const weekdayLabel = computed(() => WEEKDAYS[today.value.getDay()])
+const weekLabel = computed(() => {
+  const iso = toIsoWeek(today.value)
+  return `${iso.year} 年第 ${iso.week} 周`
+})
 
 const isLogin = computed(() => mode.value === 'login')
 const title = computed(() => (isLogin.value ? '欢迎回来' : '创建你的账户'))
@@ -139,6 +155,8 @@ async function submit() {
       email.value = hasEmail.value ? (data.email || '') : ''
       gender.value = data.gender || ''
       birthday.value = data.birthday || ''
+      // 后端下发的业务今天（东八区），作为生日上限与日历高亮的统一口径
+      businessToday.value = data.today || ''
       bindPassword.value = password.value
       message.value = ''
       // 已绑定过邮箱，或用户之前选过"暂不绑定"，都不再打扰
@@ -293,14 +311,86 @@ function handleDocumentKeydown(event) {
   }
 }
 
+// ---------- 主功能区：日历 ----------
+// 网格、农历、节气、节日、节假日/调休全部由后端装配好，
+// 前端只负责把 days 铺进 7 列网格，不做任何日期运算。
+const calendarYear = ref(0)
+const calendarMonth = ref(0)
+const calendarDays = ref([])
+const calendarWeekdays = ref(WEEKDAYS)
+const calendarLabel = ref('')
+const calendarHolidayAvailable = ref(true)
+const calendarError = ref('')
+const calendarLoading = ref(false)
+
+/** 取某个月的日历；不传年月时后端按业务当月返回。 */
+async function loadCalendar(year, month) {
+  const query = year && month ? `?year=${year}&month=${month}` : ''
+  calendarLoading.value = true
+  calendarError.value = ''
+  try {
+    const response = await fetch(`/api/calendar/month${query}`)
+    const result = await response.json()
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || '日历加载失败')
+    }
+    const data = result.data || {}
+    calendarYear.value = data.year || 0
+    calendarMonth.value = data.month || 0
+    calendarDays.value = data.days || []
+    calendarWeekdays.value = data.weekdays || WEEKDAYS
+    calendarLabel.value = data.monthLabel || ''
+    calendarHolidayAvailable.value = Boolean(data.holidayDataAvailable)
+    // 顺手刷新业务今天，保证日历高亮与生日上限跟后端一致
+    if (data.today) {
+      businessToday.value = data.today
+    }
+  } catch (requestError) {
+    calendarError.value = requestError.message || '无法连接服务器'
+  } finally {
+    calendarLoading.value = false
+  }
+}
+
+/** 前后翻月。 */
+function shiftMonth(step) {
+  const base = new Date(calendarYear.value, calendarMonth.value - 1 + step, 1)
+  loadCalendar(base.getFullYear(), base.getMonth() + 1)
+}
+
+watch(isHome, (value) => {
+  if (value) {
+    loadCalendar(null, null)
+  }
+})
+
+/** 跨零点后刷新，避免页面长时间开着还显示昨天。 */
+function refreshTodayIfNeeded() {
+  const now = new Date()
+  if (toIsoDate(now) === toIsoDate(localNow.value)) {
+    return
+  }
+  localNow.value = now
+  if (isHome.value) {
+    // 重新拉一次当前显示的月份，同时把后端口径的今天同步过来
+    loadCalendar(calendarYear.value || null, calendarMonth.value || null)
+  }
+}
+
+let todayTimer = null
+
 onMounted(() => {
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
+  todayTimer = window.setInterval(refreshTodayIfNeeded, 60000)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
+  if (todayTimer !== null) {
+    window.clearInterval(todayTimer)
+  }
 })
 </script>
 
@@ -334,7 +424,7 @@ onBeforeUnmount(() => {
 
         <!-- 当日大日历：上面年月，中间大数字，下面星期 -->
         <div class="month-board">
-          <p class="day-label">{{ now.getFullYear() }} 年 {{ now.getMonth() + 1 }} 月</p>
+          <p class="day-label">{{ today.getFullYear() }} 年 {{ today.getMonth() + 1 }} 月</p>
           <p class="day-number" aria-hidden="true">{{ todayDate }}</p>
           <p class="day-sub">{{ weekdayLabel }}</p>
         </div>
@@ -507,16 +597,54 @@ onBeforeUnmount(() => {
         </p>
       </header>
 
-      <!-- 主功能区域：后续的主要功能直接写在这个画布里 -->
-      <div class="canvas-well">
+      <!-- 主功能区域：日历。
+           公历网格、农历、节气、节日、节假日/调休全部由后端装配，
+           这里只负责把 days 铺进 7 列网格。 -->
+      <div class="canvas-well canvas-well--calendar">
         <span class="tick tick--tl" aria-hidden="true"></span>
         <span class="tick tick--tr" aria-hidden="true"></span>
         <span class="tick tick--bl" aria-hidden="true"></span>
         <span class="tick tick--br" aria-hidden="true"></span>
 
-        <p class="eyebrow">Main Canvas</p>
-        <p class="canvas-hint">主功能区</p>
-        <p class="canvas-sub">这里预留给接下来的主要功能。</p>
+        <div class="calendar" :class="{ 'is-loading': calendarLoading }">
+          <header class="calendar-head">
+            <button class="calendar-nav" type="button" aria-label="上个月" @click="shiftMonth(-1)">‹</button>
+            <div class="calendar-title">
+              <p class="calendar-month">{{ calendarLabel || '日历' }}</p>
+              <p class="calendar-sub">
+                {{ calendarHolidayAvailable ? '农历 · 节气 · 节假日' : '该年放假安排尚未发布' }}
+              </p>
+            </div>
+            <button class="calendar-nav" type="button" aria-label="下个月" @click="shiftMonth(1)">›</button>
+          </header>
+
+          <div class="calendar-weekdays" aria-hidden="true">
+            <span v-for="weekday in calendarWeekdays" :key="weekday">{{ weekday }}</span>
+          </div>
+
+          <div class="calendar-grid">
+            <div
+              v-for="day in calendarDays"
+              :key="day.date"
+              class="calendar-cell"
+              :class="{
+                'is-out': !day.inMonth,
+                'is-today': day.today,
+                'is-rest': day.holidayType === 1,
+                'is-work': day.holidayType === 2
+              }"
+              :title="day.holidayName || day.date"
+            >
+              <span class="calendar-day">{{ day.day }}</span>
+              <span class="calendar-label">{{ day.label }}</span>
+              <span v-if="day.holidayType" class="calendar-badge">
+                {{ day.holidayType === 1 ? '休' : '班' }}
+              </span>
+            </div>
+          </div>
+
+          <p v-if="calendarError" class="notice notice--error" role="alert">{{ calendarError }}</p>
+        </div>
       </div>
 
       <footer class="canvas-foot">

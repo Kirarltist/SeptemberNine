@@ -683,17 +683,169 @@ form {
   box-shadow: var(--sink);
 }
 
-.canvas-hint {
-  color: var(--ink);
-  font-size: clamp(26px, 3.2vw, 40px);
-  font-weight: 700;
-  letter-spacing: 0.16em;
+/* ---------- 主功能区：日历 ---------- */
+/* 主功能区的内容是日历，要铺满整块画布，所以改成左对齐的纵向流 */
+.canvas-well--calendar {
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 18px;
+  text-align: left;
 }
 
-.canvas-sub {
-  max-width: 430px;
+.calendar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  transition: opacity 200ms var(--ease);
+}
+
+/* 拉取数据时整体压暗，避免骨架闪动 */
+.calendar.is-loading {
+  opacity: 0.55;
+}
+
+.calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.calendar-title {
+  text-align: center;
+}
+
+.calendar-month {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(18px, 2.1vw, 24px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.calendar-sub {
+  margin: 2px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 11.5px;
+  letter-spacing: 0.12em;
+}
+
+/* 翻月按钮：沿用浮雕风格，按下时凹陷 */
+.calendar-nav {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  color: var(--accent-deep);
+  font-size: 20px;
+  line-height: 1;
+  background: var(--panel);
+  border: 0;
+  border-radius: 50%;
+  box-shadow: var(--lift-xs);
+  cursor: pointer;
+  place-items: center;
+  transition: box-shadow 180ms var(--ease), color 180ms var(--ease);
+}
+
+.calendar-nav:hover {
+  color: var(--accent);
+}
+
+.calendar-nav:active {
+  box-shadow: var(--sink-sm);
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-align: center;
+}
+
+.calendar-grid {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  align-content: start;
+}
+
+.calendar-cell {
+  position: relative;
+  display: flex;
+  min-height: 62px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 2px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--lift-xs);
+}
+
+.calendar-day {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.calendar-label {
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* 网格首尾补位的邻月日期：去掉浮雕并压暗，视觉上退出当月 */
+.calendar-cell.is-out {
+  box-shadow: none;
+}
+
+.calendar-cell.is-out .calendar-day,
+.calendar-cell.is-out .calendar-label {
+  color: var(--faint);
+}
+
+/* 今天：内描边强调，不改变布局尺寸 */
+.calendar-cell.is-today {
+  box-shadow: var(--lift-xs), inset 0 0 0 2px var(--accent-soft);
+}
+
+.calendar-cell.is-today .calendar-day {
+  color: var(--accent-deep);
+}
+
+/* 休 = 放假（红），班 = 调休上班（灰），与国内日历惯例一致 */
+.calendar-cell.is-rest .calendar-day {
+  color: var(--danger);
+}
+
+.calendar-cell.is-work .calendar-day {
+  color: var(--muted);
+}
+
+.calendar-badge {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  padding: 0 4px;
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 14px;
+  background: var(--danger);
+  border-radius: 5px;
+}
+
+.calendar-cell.is-work .calendar-badge {
+  background: var(--faint);
 }
 
 .tick {
@@ -973,6 +1125,10 @@ button:focus-visible {
   .canvas-bar {
     align-items: flex-start;
   }
+
+  .calendar-cell {
+    min-height: 54px;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1027,8 +1183,33 @@ button:focus-visible {
     font-size: 11px;
   }
 
-  .canvas-hint {
-    font-size: 26px;
+  .canvas-well--calendar {
+    padding: 22px 14px 26px;
+  }
+
+  .calendar-grid,
+  .calendar-weekdays {
+    gap: 5px;
+  }
+
+  .calendar-cell {
+    min-height: 46px;
+    gap: 2px;
+    padding: 4px 1px;
+  }
+
+  .calendar-day {
+    font-size: 14px;
+  }
+
+  .calendar-label {
+    font-size: 9px;
+  }
+
+  .calendar-nav {
+    width: 32px;
+    height: 32px;
+    font-size: 17px;
   }
 
   .canvas-foot {

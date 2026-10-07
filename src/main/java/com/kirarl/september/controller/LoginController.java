@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 
@@ -28,9 +29,22 @@ public class LoginController {
     private static final LocalDate EARLIEST_BIRTHDAY = LocalDate.of(1900, 1, 1);
 
     private final UserService userService;
+    /** 业务时钟（东八区），见 AppTimeConfig。所有「今天」都必须走它。 */
+    private final Clock businessClock;
 
-    public LoginController(UserService userService) {
+    public LoginController(UserService userService, Clock businessClock) {
         this.userService = userService;
+        this.businessClock = businessClock;
+    }
+
+    /**
+     * 业务口径的「今天」。
+     *
+     * <p>不要改用无参数的 {@code LocalDate.now()}：那会跟随服务器 JVM 默认时区
+     * （云主机常为 UTC），导致东八区用户在凌晨时段选「今天」被误判为「晚于今天」。
+     */
+    private LocalDate today() {
+        return LocalDate.now(businessClock);
     }
 
     /**
@@ -57,6 +71,9 @@ public class LoginController {
         // 性别与生日未设置时回传 null，由前端统一显示“保密”
         data.put("gender", user == null ? null : user.getGender());
         data.put("birthday", user == null || user.getBirthday() == null ? null : user.getBirthday().toString());
+        // 下发业务口径的今天（东八区）。前端用它作为生日上限和日历里的「今天」，
+        // 这样前后端对「今天」的判断永远一致，不受访问者设备时区影响。
+        data.put("today", today().toString());
         return Result.success(hasEmail ? "登录成功" : "登录成功，可绑定邮箱", data);
     }
 
@@ -122,12 +139,15 @@ public class LoginController {
             try {
                 birthday = LocalDate.parse(rawBirthday);
             } catch (DateTimeParseException ex) {
-                return Result.failure("生日格式应为 yyyy-MM-dd");
+                // 这里是严格 ISO 解析：2024-2-5（月份不补零）、2024-02-30、
+                // 以及恰好卡在下界上的 1900-02-29（1900 不是闰年）都会落到这里。
+                // 所以文案要同时覆盖「格式不对」和「日期不存在」两种情况。
+                return Result.failure("生日格式应为 yyyy-MM-dd，且必须是真实存在的日期");
             }
             if (birthday.isBefore(EARLIEST_BIRTHDAY)) {
                 return Result.failure("生日不能早于 1900-01-01");
             }
-            if (birthday.isAfter(LocalDate.now())) {
+            if (birthday.isAfter(today())) {
                 return Result.failure("生日不能晚于今天");
             }
         }

@@ -16,7 +16,8 @@ public class HomeController {
                 "login", "POST /api/auth/login",
                 "register", "POST /api/auth/register",
                 "bindEmail", "POST /api/auth/bind-email",
-                "updateProfile", "POST /api/auth/update-profile"
+                "updateProfile", "POST /api/auth/update-profile",
+                "calendarMonth", "GET /api/calendar/month"
         ));
     }
 }
