@@ -693,6 +693,11 @@ form {
 }
 
 .calendar {
+  /* 格子行高与列间距：网格按固定 6 行排版，这两个值决定整块核心区的大小。
+     行高跟窗口高度挂钩（同一屏幕内恒定），矮窗口下不会把卡片顶得过高。 */
+  --calendar-row: clamp(46px, 6vh, 62px);
+  --calendar-gap: 8px;
+
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -713,8 +718,31 @@ form {
   gap: 14px;
 }
 
+/* 年月标题：本身也是「年月快速跳转」的开关 */
+.calendar-title-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
 .calendar-title {
-  text-align: center;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  transition: box-shadow 180ms var(--ease);
+}
+
+.calendar-title:hover {
+  box-shadow: var(--lift-xs);
+}
+
+.calendar-title:active,
+.calendar-title[aria-expanded='true'] {
+  box-shadow: var(--sink-sm);
 }
 
 .calendar-month {
@@ -725,11 +753,153 @@ form {
   letter-spacing: 0.08em;
 }
 
+.calendar-caret {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 200ms var(--ease);
+}
+
+.calendar-title[aria-expanded='true'] .calendar-caret {
+  transform: rotate(180deg);
+}
+
 .calendar-sub {
   margin: 2px 0 0;
   color: var(--muted);
   font-size: 11.5px;
   letter-spacing: 0.12em;
+}
+
+/* ---------- 年月快速跳转 ---------- */
+.month-picker {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 12px);
+  left: 50%;
+  width: 246px;
+  padding: 14px 14px 12px;
+  /* 与 .picker-* 过渡共用：基准位移必须留着 */
+  transform: translateX(-50%);
+  background: var(--panel);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--lift);
+}
+
+.month-picker-year {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.month-picker-year strong {
+  color: var(--ink);
+  font-size: 14px;
+  letter-spacing: 0.1em;
+}
+
+.month-picker-step {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  color: var(--accent-deep);
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 50%;
+  box-shadow: var(--lift-xs);
+  place-items: center;
+  transition: box-shadow 180ms var(--ease), color 180ms var(--ease);
+}
+
+.month-picker-step:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.month-picker-step:active:not(:disabled) {
+  box-shadow: var(--sink-sm);
+}
+
+.month-picker-step:disabled {
+  color: var(--faint);
+  box-shadow: var(--sink-sm);
+  cursor: default;
+}
+
+.month-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.month-picker-grid button {
+  padding: 8px 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  border-radius: 10px;
+  box-shadow: var(--lift-xs);
+  transition: box-shadow 170ms var(--ease), color 170ms var(--ease), background 170ms var(--ease);
+}
+
+.month-picker-grid button:hover {
+  color: var(--accent-deep);
+}
+
+.month-picker-grid button:active {
+  box-shadow: var(--sink-sm);
+}
+
+/* 当前正在看的月份：凹陷按下态 */
+.month-picker-grid button.active {
+  color: var(--accent-deep);
+  box-shadow: var(--sink-sm);
+}
+
+/* 业务口径的今天所在月份：给个小点提示 */
+.month-picker-grid button.today {
+  position: relative;
+}
+
+.month-picker-grid button.today::after {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 50%;
+  content: '';
+  transform: translateX(-50%);
+}
+
+.month-picker-foot {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  border-radius: 10px;
+  transition: color 180ms var(--ease);
+}
+
+.month-picker-foot:hover {
+  color: var(--accent-deep);
+}
+
+/* 选择器专门一套过渡：pop 的 translateY 会覆盖掉居中的 translateX */
+.picker-enter-active,
+.picker-leave-active {
+  transition: opacity 170ms var(--ease), transform 190ms var(--ease);
+}
+
+.picker-enter-from,
+.picker-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -8px) scale(0.98);
 }
 
 /* 翻月按钮：沿用浮雕风格，按下时凹陷 */
@@ -749,18 +919,81 @@ form {
   transition: box-shadow 180ms var(--ease), color 180ms var(--ease);
 }
 
-.calendar-nav:hover {
+.calendar-nav:hover:not(:disabled) {
   color: var(--accent);
 }
 
-.calendar-nav:active {
+.calendar-nav:active:not(:disabled) {
   box-shadow: var(--sink-sm);
+}
+
+/* 浏览边界（1900 / 2100）之外不再翻页 */
+.calendar-nav:disabled {
+  color: var(--faint);
+  box-shadow: var(--sink-sm);
+  cursor: default;
+}
+
+/* 工具行：左边「回到今天」，右边交互提示 */
+.calendar-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+}
+
+.today-button {
+  padding: 7px 16px;
+  color: var(--accent-deep);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  border-radius: 999px;
+  box-shadow: var(--lift-xs);
+  transition: box-shadow 180ms var(--ease), color 180ms var(--ease);
+}
+
+.today-button:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.today-button:active:not(:disabled) {
+  box-shadow: var(--sink-sm);
+}
+
+.today-button:disabled {
+  color: var(--faint);
+  box-shadow: var(--sink-sm);
+  cursor: default;
+}
+
+.calendar-hint {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+/* 网格 + 详情面板：宽屏并排，窄屏上下堆叠 */
+.calendar-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) minmax(188px, 224px);
+  gap: 18px;
+  align-items: start;
+}
+
+.calendar-main {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .calendar-weekdays {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
+  gap: var(--calendar-gap);
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
@@ -768,18 +1001,20 @@ form {
   text-align: center;
 }
 
+/* 恒定大小：显式排 6 行 + 固定行高，所以 4 周 / 5 周 / 6 周的月份网格盒子完全一样高，
+   翻月时卡片不会跟着忽高忽低。不足 6 行的月份，多出来的行就是留白。 */
 .calendar-grid {
   display: grid;
   flex: 1;
   grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
-  align-content: start;
+  grid-template-rows: repeat(6, minmax(var(--calendar-row), 1fr));
+  gap: var(--calendar-gap);
 }
 
 .calendar-cell {
   position: relative;
   display: flex;
-  min-height: 62px;
+  width: 100%;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -787,6 +1022,20 @@ form {
   padding: 6px 2px;
   border-radius: var(--radius-sm);
   box-shadow: var(--lift-xs);
+  transition: box-shadow 180ms var(--ease), background 180ms var(--ease);
+}
+
+/* 格子现在是 button：悬停抬起、按下凹陷，与其它控件同一套语言 */
+.calendar-cell:hover {
+  box-shadow: var(--lift-sm);
+}
+
+.calendar-cell:active {
+  box-shadow: var(--sink-sm);
+}
+
+.calendar-cell:focus-visible {
+  outline-offset: 1px;
 }
 
 .calendar-day {
@@ -846,6 +1095,168 @@ form {
 
 .calendar-cell.is-work .calendar-badge {
   background: var(--faint);
+}
+
+/* ---------- 选中日期 ---------- */
+/* 选中 = 凹陷底板 + 淡蓝底，读作「按下去的那一格」；
+   与「今天」的内描边可以叠加，两种状态互不遮挡。 */
+.calendar-cell.is-selected {
+  background: linear-gradient(145deg, rgba(127, 150, 189, 0.22), rgba(127, 150, 189, 0.08));
+  box-shadow: var(--sink-sm);
+}
+
+.calendar-cell.is-selected .calendar-day,
+.calendar-cell.is-selected .calendar-label {
+  color: var(--accent-deep);
+}
+
+.calendar-cell.is-selected.is-today {
+  box-shadow: var(--sink-sm), inset 0 0 0 2px var(--accent-soft);
+}
+
+/* 邻月格子也要给出「可以点」的反馈，只是弱一档 */
+.calendar-cell.is-out:hover {
+  box-shadow: var(--lift-xs);
+}
+
+/* ---------- 悬停气泡 ---------- */
+/* 定位在 .calendar-main 上，所以气泡不能是 grid 的子元素 */
+.calendar-tooltip {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  max-width: 240px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 13px;
+  text-align: center;
+  background: var(--panel);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--lift-sm);
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 10px));
+}
+
+.calendar-tooltip.is-below {
+  transform: translate(-50%, 10px);
+}
+
+.tooltip-date {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.tooltip-meta {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tooltip-tag {
+  align-self: center;
+  margin-top: 2px;
+  padding: 0 7px;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  background: var(--danger);
+  border-radius: 6px;
+}
+
+.tooltip-tag.is-work {
+  background: var(--faint);
+}
+
+/* 触屏没有悬停，气泡只会在标签页切换后残留，直接不显示 */
+@media (hover: none) {
+  .calendar-tooltip {
+    display: none;
+  }
+}
+
+/* ---------- 选中日详情面板 ---------- */
+.calendar-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 16px;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--lift-sm);
+}
+
+.detail-eyebrow {
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+}
+
+.detail-day {
+  color: var(--ink);
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
+}
+
+.detail-month {
+  color: var(--ink-soft);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.detail-relative {
+  padding: 2px 11px;
+  color: var(--accent-deep);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  border-radius: 999px;
+  box-shadow: var(--sink-sm);
+}
+
+.detail-relative.is-today {
+  color: #fff;
+  background: var(--accent-soft);
+  box-shadow: var(--lift-xs);
+}
+
+.detail-list {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 7px;
+  margin: 8px 0 0;
+}
+
+.detail-list > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  text-align: left;
+}
+
+.detail-list dt {
+  flex: none;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+}
+
+.detail-list dd {
+  margin: 0;
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-align: right;
+}
+
+.detail-empty {
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .tick {
@@ -1126,8 +1537,23 @@ button:focus-visible {
     align-items: flex-start;
   }
 
-  .calendar-cell {
-    min-height: 54px;
+  /* 窄屏：详情面板移到网格下方，避免把 7 列挤瘦 */
+  .calendar-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .calendar-detail {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .detail-day {
+    font-size: 34px;
+  }
+
+  .detail-list > div {
+    text-align: left;
   }
 }
 
@@ -1187,29 +1613,64 @@ button:focus-visible {
     padding: 22px 14px 26px;
   }
 
-  .calendar-grid,
-  .calendar-weekdays {
-    gap: 5px;
+  .calendar {
+    --calendar-row: 46px;
+    --calendar-gap: 4px;
   }
 
   .calendar-cell {
-    min-height: 46px;
     gap: 2px;
     padding: 4px 1px;
   }
 
   .calendar-day {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .calendar-label {
     font-size: 9px;
   }
 
+  /* 窄格子里两位日号会顶到右上角的角标，把角标收紧并加一圈底色描边 */
+  .calendar-badge {
+    top: 2px;
+    right: 2px;
+    padding: 0 3px;
+    font-size: 8.5px;
+    line-height: 11px;
+    border-radius: 4px;
+    box-shadow: 0 0 0 1px var(--panel);
+  }
+
   .calendar-nav {
     width: 32px;
     height: 32px;
     font-size: 17px;
+  }
+
+  .calendar-toolbar {
+    gap: 6px 10px;
+  }
+
+  .today-button {
+    padding: 6px 13px;
+    font-size: 11px;
+  }
+
+  .calendar-hint {
+    font-size: 10px;
+  }
+
+  .month-picker {
+    width: min(240px, calc(100vw - 56px));
+  }
+
+  .calendar-detail {
+    padding: 14px 12px;
+  }
+
+  .detail-day {
+    font-size: 30px;
   }
 
   .canvas-foot {

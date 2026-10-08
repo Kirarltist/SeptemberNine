@@ -299,14 +299,31 @@ function isInsideUserCenter(target) {
   )
 }
 
+function isInsideMonthPicker(target) {
+  if (!target || typeof target.nodeType !== 'number') {
+    return false
+  }
+  return Boolean(pickerRef.value && pickerRef.value.contains(target))
+}
+
 function handleDocumentPointerDown(event) {
   if (userPanelOpen.value && !isInsideUserCenter(event.target)) {
     userPanelOpen.value = false
   }
+  if (monthPickerOpen.value && !isInsideMonthPicker(event.target)) {
+    monthPickerOpen.value = false
+  }
 }
 
 function handleDocumentKeydown(event) {
-  if (event.key === 'Escape' && userPanelOpen.value) {
+  if (event.key !== 'Escape') {
+    return
+  }
+  if (monthPickerOpen.value) {
+    monthPickerOpen.value = false
+    return
+  }
+  if (userPanelOpen.value) {
     closeUserPanel()
   }
 }
@@ -314,6 +331,17 @@ function handleDocumentKeydown(event) {
 // ---------- 主功能区：日历 ----------
 // 网格、农历、节气、节日、节假日/调休全部由后端装配好，
 // 前端只负责把 days 铺进 7 列网格，不做任何日期运算。
+//
+// 交互部分共有五件事：
+//   1. 点击某天 → 选中并显示右侧详情（点到邻月灰格时顺带翻到那个月）；
+//   2. 「回到今天」→ 回到业务当月并选中今天；
+//   3. 方向键 / Home / End / PageUp / PageDown → 在网格内移动选中日；
+//   4. 点年月标题 → 弹出年月选择器，直接跳到 1900–2100 的任意月份；
+//   5. 鼠标悬停 → 自定义气泡显示当天农历与放假信息（触屏不出气泡）。
+const CALENDAR_MIN_YEAR = 1900
+const CALENDAR_MAX_YEAR = 2100
+const MONTH_NAMES = Array.from({ length: 12 }, (unused, index) => `${index + 1} 月`)
+
 const calendarYear = ref(0)
 const calendarMonth = ref(0)
 const calendarDays = ref([])
@@ -323,9 +351,147 @@ const calendarHolidayAvailable = ref(true)
 const calendarError = ref('')
 const calendarLoading = ref(false)
 
+// 选中日期（ISO）是这一组交互的中心：详情面板、键盘导航、回到今天都以它为准
+const selectedDate = ref('')
+const hoverDate = ref('')
+const hoverPosition = ref({ left: 0, top: 0, below: false })
+const monthPickerOpen = ref(false)
+const pickerYear = ref(0)
+const pickerRef = ref(null)
+const calendarMainRef = ref(null)
+const calendarGridRef = ref(null)
+// 触屏设备没有「悬停」，此时不显示跟随指针的气泡，避免点一下就残留一个浮层
+const hoverCapable = window.matchMedia ? window.matchMedia('(hover: hover)').matches : true
+
+/** 用本地时间解析 ISO 日期，避免 new Date('yyyy-MM-dd') 被当成 UTC 而错一天。 */
+function parseIsoDate(iso) {
+  return new Date(`${iso}T00:00:00`)
+}
+
+function addDays(iso, delta) {
+  const date = parseIsoDate(iso)
+  date.setDate(date.getDate() + delta)
+  return toIsoDate(date)
+}
+
+function formatIsoDate(iso) {
+  const date = parseIsoDate(iso)
+  return `${date.getFullYear()} 年 ${date.getMonth() + 1} 月 ${date.getDate()} 日`
+}
+
+/** 相对业务今天的口语化描述（今天 / 明天 / N 天后 / N 天前）。 */
+function relativeDayLabel(iso) {
+  if (!iso || !todayIso.value) {
+    return ''
+  }
+  const target = iso.split('-').map(Number)
+  const base = todayIso.value.split('-').map(Number)
+  // 同样用 UTC 毫秒做差，绕开夏令时导致的 23/25 小时日
+  const diff = Math.round(
+    (Date.UTC(target[0], target[1] - 1, target[2]) - Date.UTC(base[0], base[1] - 1, base[2])) / 86400000
+  )
+  if (diff === 0) {
+    return '今天'
+  }
+  if (diff === 1) {
+    return '明天'
+  }
+  if (diff === -1) {
+    return '昨天'
+  }
+  return diff > 0 ? `${diff} 天后` : `${-diff} 天前`
+}
+
+/** 翻月时尽量保留「几号」：选中 7 号就跳到下月 7 号，月末不足时取当月最后一天。 */
+function preferredDateInMonth(year, month) {
+  const anchorDay = selectedDay.value ? selectedDay.value.day : today.value.getDate()
+  const lastDay = new Date(year, month, 0).getDate()
+  const day = Math.min(anchorDay, lastDay)
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+const selectedDay = computed(() => (
+  calendarDays.value.find((day) => day.date === selectedDate.value) || null
+))
+const hoverDay = computed(() => (
+  hoverDate.value
+    ? calendarDays.value.find((day) => day.date === hoverDate.value) || null
+    : null
+))
+const viewingToday = computed(() => {
+  const iso = todayIso.value
+  return calendarYear.value === Number(iso.slice(0, 4))
+    && calendarMonth.value === Number(iso.slice(5, 7))
+})
+const isTodaySelected = computed(() => viewingToday.value && selectedDate.value === todayIso.value)
+const selectedWeekday = computed(() => (
+  selectedDay.value ? WEEKDAYS[parseIsoDate(selectedDay.value.date).getDay()] : ''
+))
+const selectedRelative = computed(() => (
+  selectedDay.value ? relativeDayLabel(selectedDay.value.date) : ''
+))
+
+/** 详情面板的字段：只展示后端已经算好的信息，不在前端重算农历。 */
+const selectedRows = computed(() => {
+  const day = selectedDay.value
+  if (!day) {
+    return []
+  }
+  const rows = [{ key: 'lunar', label: '农历', value: day.lunar }]
+  if (day.jieQi) {
+    rows.push({ key: 'jieqi', label: '节气', value: day.jieQi })
+  }
+  if (day.label && day.label !== day.lunar && day.label !== day.jieQi) {
+    rows.push({ key: 'festival', label: '节日', value: day.label })
+  }
+  if (day.holidayType) {
+    rows.push({
+      key: 'holiday',
+      label: '假期',
+      value: `${day.holidayName || '调休'} · ${day.holidayType === 1 ? '放假' : '调休上班'}`
+    })
+  }
+  if (!day.inMonth) {
+    rows.push({ key: 'out', label: '位置', value: '邻月日期，点击可跳到该月' })
+  }
+  return rows
+})
+
+/** 单元格的无障碍名称：读屏用户拿到的信息与气泡一致。 */
+function cellLabel(day) {
+  const parts = [`${formatIsoDate(day.date)} ${WEEKDAYS[parseIsoDate(day.date).getDay()]}`]
+  if (day.today) {
+    parts.push('今天')
+  }
+  parts.push(`农历${day.lunar}`)
+  if (day.label && day.label !== day.lunar) {
+    parts.push(day.label)
+  }
+  if (day.holidayType === 1) {
+    parts.push(`${day.holidayName || '假期'}放假`)
+  } else if (day.holidayType === 2) {
+    parts.push(`${day.holidayName || '调休'}上班`)
+  }
+  return parts.join('，')
+}
+
+function hoverMeta(day) {
+  const parts = [WEEKDAYS[parseIsoDate(day.date).getDay()], `农历${day.lunar}`]
+  if (day.label && day.label !== day.lunar) {
+    parts.push(day.label)
+  }
+  return parts.join(' · ')
+}
+
+/** 递增的请求序号，用来丢弃过期响应。 */
+let calendarRequestId = 0
+
 /** 取某个月的日历；不传年月时后端按业务当月返回。 */
-async function loadCalendar(year, month) {
+async function loadCalendar(year, month, options = {}) {
   const query = year && month ? `?year=${year}&month=${month}` : ''
+  // 连点翻月或快速跳转时会有多个请求同时在飞，只认最后发出的那个
+  calendarRequestId += 1
+  const requestId = calendarRequestId
   calendarLoading.value = true
   calendarError.value = ''
   try {
@@ -333,6 +499,9 @@ async function loadCalendar(year, month) {
     const result = await response.json()
     if (!response.ok || !result.success) {
       throw new Error(result.message || '日历加载失败')
+    }
+    if (requestId !== calendarRequestId) {
+      return
     }
     const data = result.data || {}
     calendarYear.value = data.year || 0
@@ -345,22 +514,200 @@ async function loadCalendar(year, month) {
     if (data.today) {
       businessToday.value = data.today
     }
+    // 选中日期必须落在新网格里：优先用调用方指定的那一天，
+    // 否则退回本月今天，再退回当月第一天。
+    const wanted = options.selectDate || selectedDate.value
+    if (calendarDays.value.some((day) => day.date === wanted)) {
+      selectedDate.value = wanted
+    } else {
+      const anchor = calendarDays.value.find((day) => day.today)
+        || calendarDays.value.find((day) => day.inMonth)
+      selectedDate.value = anchor ? anchor.date : ''
+    }
+    hoverDate.value = ''
+    monthPickerOpen.value = false
+    if (options.focus) {
+      await nextTick()
+      focusSelectedCell()
+    }
   } catch (requestError) {
-    calendarError.value = requestError.message || '无法连接服务器'
+    if (requestId === calendarRequestId) {
+      calendarError.value = requestError.message || '无法连接服务器'
+    }
   } finally {
-    calendarLoading.value = false
+    if (requestId === calendarRequestId) {
+      calendarLoading.value = false
+    }
   }
 }
 
-/** 前后翻月。 */
-function shiftMonth(step) {
+function canShiftMonth(step) {
+  if (!calendarYear.value || !calendarMonth.value) {
+    return false
+  }
+  const year = new Date(calendarYear.value, calendarMonth.value - 1 + step, 1).getFullYear()
+  return year >= CALENDAR_MIN_YEAR && year <= CALENDAR_MAX_YEAR
+}
+
+/** 前后翻月，尽量保留原来的「几号」。 */
+function shiftMonth(step, options = {}) {
   const base = new Date(calendarYear.value, calendarMonth.value - 1 + step, 1)
-  loadCalendar(base.getFullYear(), base.getMonth() + 1)
+  const year = base.getFullYear()
+  const month = base.getMonth() + 1
+  if (year < CALENDAR_MIN_YEAR || year > CALENDAR_MAX_YEAR) {
+    return
+  }
+  loadCalendar(year, month, {
+    selectDate: preferredDateInMonth(year, month),
+    focus: options.focus
+  })
+}
+
+/** 把选中日对应的格子真正聚焦，键盘操作后焦点才不会丢在旧格子上。 */
+function focusSelectedCell() {
+  const grid = calendarGridRef.value
+  if (!grid || !selectedDate.value) {
+    return
+  }
+  const cell = grid.querySelector(`[data-date="${selectedDate.value}"]`)
+  if (cell) {
+    cell.focus()
+  }
+}
+
+/** 选中某天；点到邻月的灰格时顺带翻到那个月。 */
+function selectDay(day) {
+  if (!day) {
+    return
+  }
+  selectedDate.value = day.date
+  hoverDate.value = ''
+  if (!day.inMonth) {
+    loadCalendar(Number(day.date.slice(0, 4)), Number(day.date.slice(5, 7)), { selectDate: day.date })
+  }
+}
+
+/** 回到业务当月并选中今天；已经在当月时只是把选中移回今天。 */
+function goToToday() {
+  const iso = todayIso.value
+  if (!iso) {
+    return
+  }
+  const year = Number(iso.slice(0, 4))
+  const month = Number(iso.slice(5, 7))
+  monthPickerOpen.value = false
+  if (calendarYear.value === year && calendarMonth.value === month) {
+    selectedDate.value = iso
+    nextTick(focusSelectedCell)
+    return
+  }
+  loadCalendar(year, month, { selectDate: iso, focus: true })
+}
+
+/** 键盘导航：目标日期不在当前网格里（跨月）就先取回那个月再聚焦。 */
+function moveSelection(iso) {
+  if (!iso) {
+    return
+  }
+  const year = Number(iso.slice(0, 4))
+  if (year < CALENDAR_MIN_YEAR || year > CALENDAR_MAX_YEAR) {
+    return
+  }
+  if (calendarDays.value.some((day) => day.date === iso)) {
+    selectedDate.value = iso
+    nextTick(focusSelectedCell)
+    return
+  }
+  loadCalendar(year, Number(iso.slice(5, 7)), { selectDate: iso, focus: true })
+}
+
+function handleGridKeydown(event) {
+  const day = selectedDay.value
+  if (!day || event.altKey || event.ctrlKey || event.metaKey) {
+    return
+  }
+  if (event.key === 'PageUp' || event.key === 'PageDown') {
+    event.preventDefault()
+    shiftMonth(event.key === 'PageUp' ? -1 : 1, { focus: true })
+    return
+  }
+  let target = ''
+  if (event.key === 'ArrowLeft') {
+    target = addDays(day.date, -1)
+  } else if (event.key === 'ArrowRight') {
+    target = addDays(day.date, 1)
+  } else if (event.key === 'ArrowUp') {
+    target = addDays(day.date, -7)
+  } else if (event.key === 'ArrowDown') {
+    target = addDays(day.date, 7)
+  } else if (event.key === 'Home') {
+    target = addDays(day.date, -parseIsoDate(day.date).getDay())
+  } else if (event.key === 'End') {
+    target = addDays(day.date, 6 - parseIsoDate(day.date).getDay())
+  } else {
+    return
+  }
+  event.preventDefault()
+  moveSelection(target)
+}
+
+function toggleMonthPicker() {
+  monthPickerOpen.value = !monthPickerOpen.value
+  if (monthPickerOpen.value) {
+    pickerYear.value = calendarYear.value || Number(todayIso.value.slice(0, 4))
+    hoverDate.value = ''
+  }
+}
+
+function shiftPickerYear(step) {
+  const next = pickerYear.value + step
+  if (next < CALENDAR_MIN_YEAR || next > CALENDAR_MAX_YEAR) {
+    return
+  }
+  pickerYear.value = next
+}
+
+function pickMonth(month) {
+  const year = pickerYear.value
+  loadCalendar(year, month, { selectDate: preferredDateInMonth(year, month) })
+}
+
+function pickCurrentYear() {
+  pickerYear.value = Number(todayIso.value.slice(0, 4))
+}
+
+/** 悬停气泡：跟随指针所在格子，第一行改成向下展开，避免顶出画布。 */
+function showHover(day, event) {
+  if (!hoverCapable || monthPickerOpen.value) {
+    return
+  }
+  const main = calendarMainRef.value
+  const cell = event.currentTarget
+  if (!main || !cell) {
+    return
+  }
+  const mainRect = main.getBoundingClientRect()
+  const cellRect = cell.getBoundingClientRect()
+  const index = calendarDays.value.indexOf(day)
+  const below = index >= 0 && index < 7
+  hoverPosition.value = {
+    left: cellRect.left - mainRect.left + cellRect.width / 2,
+    top: (below ? cellRect.bottom : cellRect.top) - mainRect.top,
+    below
+  }
+  hoverDate.value = day.date
+}
+
+function hideHover() {
+  hoverDate.value = ''
 }
 
 watch(isHome, (value) => {
   if (value) {
     loadCalendar(null, null)
+  } else {
+    monthPickerOpen.value = false
+    hoverDate.value = ''
   }
 })
 
@@ -382,12 +729,15 @@ let todayTimer = null
 onMounted(() => {
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeydown)
+  // 视口变化后格子的位置就变了，气泡按旧坐标会飘走，直接收起
+  window.addEventListener('resize', hideHover)
   todayTimer = window.setInterval(refreshTodayIfNeeded, 60000)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
+  window.removeEventListener('resize', hideHover)
   if (todayTimer !== null) {
     window.clearInterval(todayTimer)
   }
@@ -608,39 +958,197 @@ onBeforeUnmount(() => {
 
         <div class="calendar" :class="{ 'is-loading': calendarLoading }">
           <header class="calendar-head">
-            <button class="calendar-nav" type="button" aria-label="上个月" @click="shiftMonth(-1)">‹</button>
-            <div class="calendar-title">
-              <p class="calendar-month">{{ calendarLabel || '日历' }}</p>
+            <button
+              class="calendar-nav"
+              type="button"
+              aria-label="上个月"
+              :disabled="!canShiftMonth(-1)"
+              @click="shiftMonth(-1)"
+            >
+              ‹
+            </button>
+
+            <div ref="pickerRef" class="calendar-title-wrap">
+              <button
+                class="calendar-title"
+                type="button"
+                aria-haspopup="dialog"
+                aria-controls="calendar-month-picker"
+                :aria-expanded="monthPickerOpen"
+                @click="toggleMonthPicker"
+              >
+                <span class="calendar-month">{{ calendarLabel || '日历' }}</span>
+                <span class="calendar-caret" aria-hidden="true">▾</span>
+              </button>
               <p class="calendar-sub">
                 {{ calendarHolidayAvailable ? '农历 · 节气 · 节假日' : '该年放假安排尚未发布' }}
               </p>
+
+              <transition name="picker">
+                <div
+                  v-if="monthPickerOpen"
+                  id="calendar-month-picker"
+                  class="month-picker"
+                  role="dialog"
+                  aria-label="选择年月"
+                >
+                  <div class="month-picker-year">
+                    <button
+                      class="month-picker-step"
+                      type="button"
+                      aria-label="上一年"
+                      :disabled="pickerYear <= CALENDAR_MIN_YEAR"
+                      @click="shiftPickerYear(-1)"
+                    >
+                      ‹
+                    </button>
+                    <strong>{{ pickerYear }} 年</strong>
+                    <button
+                      class="month-picker-step"
+                      type="button"
+                      aria-label="下一年"
+                      :disabled="pickerYear >= CALENDAR_MAX_YEAR"
+                      @click="shiftPickerYear(1)"
+                    >
+                      ›
+                    </button>
+                  </div>
+
+                  <div class="month-picker-grid">
+                    <button
+                      v-for="(name, index) in MONTH_NAMES"
+                      :key="name"
+                      type="button"
+                      :class="{
+                        active: pickerYear === calendarYear && index + 1 === calendarMonth,
+                        today: pickerYear === Number(todayIso.slice(0, 4))
+                          && index + 1 === Number(todayIso.slice(5, 7))
+                      }"
+                      @click="pickMonth(index + 1)"
+                    >
+                      {{ name }}
+                    </button>
+                  </div>
+
+                  <button class="month-picker-foot" type="button" @click="pickCurrentYear">
+                    回到 {{ Number(todayIso.slice(0, 4)) }} 年
+                  </button>
+                </div>
+              </transition>
             </div>
-            <button class="calendar-nav" type="button" aria-label="下个月" @click="shiftMonth(1)">›</button>
+
+            <button
+              class="calendar-nav"
+              type="button"
+              aria-label="下个月"
+              :disabled="!canShiftMonth(1)"
+              @click="shiftMonth(1)"
+            >
+              ›
+            </button>
           </header>
 
-          <div class="calendar-weekdays" aria-hidden="true">
-            <span v-for="weekday in calendarWeekdays" :key="weekday">{{ weekday }}</span>
+          <div class="calendar-toolbar">
+            <button
+              class="today-button"
+              type="button"
+              :disabled="isTodaySelected"
+              @click="goToToday"
+            >
+              回到今天
+            </button>
+            <p class="calendar-hint">点击日期查看详情 · 方向键切换</p>
           </div>
 
-          <div class="calendar-grid">
-            <div
-              v-for="day in calendarDays"
-              :key="day.date"
-              class="calendar-cell"
-              :class="{
-                'is-out': !day.inMonth,
-                'is-today': day.today,
-                'is-rest': day.holidayType === 1,
-                'is-work': day.holidayType === 2
-              }"
-              :title="day.holidayName || day.date"
-            >
-              <span class="calendar-day">{{ day.day }}</span>
-              <span class="calendar-label">{{ day.label }}</span>
-              <span v-if="day.holidayType" class="calendar-badge">
-                {{ day.holidayType === 1 ? '休' : '班' }}
-              </span>
+          <div class="calendar-body">
+            <div ref="calendarMainRef" class="calendar-main">
+              <div class="calendar-weekdays" aria-hidden="true">
+                <span v-for="weekday in calendarWeekdays" :key="weekday">{{ weekday }}</span>
+              </div>
+
+              <!-- 日期格子用 button，天然支持 Tab / Enter / 空格；
+                   方向键由 handleGridKeydown 接管，tabindex 只在选中格上。
+                   注意：气泡不能放进 grid 里，否则会占掉一个格子。 -->
+              <div
+                ref="calendarGridRef"
+                class="calendar-grid"
+                role="grid"
+                aria-label="日期"
+                @keydown="handleGridKeydown"
+              >
+                <button
+                  v-for="day in calendarDays"
+                  :key="day.date"
+                  class="calendar-cell"
+                  type="button"
+                  role="gridcell"
+                  :data-date="day.date"
+                  :tabindex="day.date === selectedDate ? 0 : -1"
+                  :aria-selected="day.date === selectedDate"
+                  :aria-label="cellLabel(day)"
+                  :class="{
+                    'is-out': !day.inMonth,
+                    'is-today': day.today,
+                    'is-selected': day.date === selectedDate,
+                    'is-rest': day.holidayType === 1,
+                    'is-work': day.holidayType === 2
+                  }"
+                  @click="selectDay(day)"
+                  @pointerenter="showHover(day, $event)"
+                  @pointerleave="hideHover"
+                >
+                  <span class="calendar-day">{{ day.day }}</span>
+                  <span class="calendar-label">{{ day.label }}</span>
+                  <span v-if="day.holidayType" class="calendar-badge">
+                    {{ day.holidayType === 1 ? '休' : '班' }}
+                  </span>
+                </button>
+              </div>
+
+              <div
+                v-if="hoverDay"
+                class="calendar-tooltip"
+                :class="{ 'is-below': hoverPosition.below }"
+                :style="{ left: `${hoverPosition.left}px`, top: `${hoverPosition.top}px` }"
+                role="tooltip"
+              >
+                <p class="tooltip-date">{{ formatIsoDate(hoverDay.date) }}</p>
+                <p class="tooltip-meta">{{ hoverMeta(hoverDay) }}</p>
+                <span
+                  v-if="hoverDay.holidayType"
+                  class="tooltip-tag"
+                  :class="{ 'is-work': hoverDay.holidayType === 2 }"
+                >
+                  {{ hoverDay.holidayType === 1 ? '休' : '班' }}
+                  {{ hoverDay.holidayName || '调休' }}
+                </span>
+              </div>
             </div>
+
+            <aside class="calendar-detail" aria-live="polite" aria-label="选中日期详情">
+              <p class="detail-eyebrow">Selected / 选中</p>
+
+              <template v-if="selectedDay">
+                <p class="detail-day">{{ selectedDay.day }}</p>
+                <p class="detail-month">
+                  {{ selectedDay.date.slice(0, 4) }} 年
+                  {{ Number(selectedDay.date.slice(5, 7)) }} 月
+                  · {{ selectedWeekday }}
+                </p>
+                <p class="detail-relative" :class="{ 'is-today': selectedDay.today }">
+                  {{ selectedRelative || '—' }}
+                </p>
+
+                <dl class="detail-list">
+                  <div v-for="row in selectedRows" :key="row.key">
+                    <dt>{{ row.label }}</dt>
+                    <dd>{{ row.value }}</dd>
+                  </div>
+                </dl>
+              </template>
+
+              <p v-else class="detail-empty">点击日历中的日期查看详情。</p>
+            </aside>
           </div>
 
           <p v-if="calendarError" class="notice notice--error" role="alert">{{ calendarError }}</p>
